@@ -12,22 +12,22 @@
 'use strict';
 var USERNAME = process.env.GITHUB_USER;
 var PASSWORD = process.env.GITHUB_PASSWORD;
-var config = require('./package.json').config;
+var config = require('./config');
 var childProcess = require('child_process');
 var CookieJar = require('./cookieJar');
 var jar = new CookieJar();
 
-var ghHost = config.gheHost || 'github.com';
-var ghProtocol = config.gheProtocol || 'https';
+var ghHost = config.github.host
+var ghProtocol = config.github.protocol
 
 /**
  * Scrape github login page
  */
 var githubLogin = function() {
-    var output = childProcess.execSync(
-      `curl -v -L ${ghProtocol}://${ghHost}/login 2>&1`,
-      {encoding: 'utf8'}
-    ).toString().split('<!DOCTYPE html>');
+  var output = childProcess.execSync(
+    `curl -v -L ${ghProtocol}://${ghHost}/login 2>&1`,
+    {encoding: 'utf8'}
+  ).toString().split('<!DOCTYPE html>');
 
   return {
     headers: output[0],

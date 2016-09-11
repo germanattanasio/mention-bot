@@ -24,7 +24,7 @@ async function downloadFileAsync(url: string, cookies: ?string): Promise<string>
     }
 
     require('child_process')
-      .execFile('curl', args, {encoding: 'utf8', maxBuffer: 1000 * 1024}, function(error, stdout, stderr) {
+      .execFile('curl', args, {encoding: 'utf8', maxBuffer: 1000 * 1024 * 10}, function(error, stdout, stderr) {
         if (error) {
           reject(error);
         } else {
@@ -78,7 +78,11 @@ function parseDiffFile(lines: Array<string>): FileInfo {
   }
 
   line = lines.pop();
-  if (startsWith(line, 'Binary files')) {
+  if (!line) {
+    // If the diff ends in an empty file with 0 additions or deletions, line will be null
+  } else if (startsWith(line, 'diff --git')) {
+    lines.push(line);
+  } else if (startsWith(line, 'Binary files')) {
     // We just ignore binary files (mostly images). If we want to improve the
     // precision in the future, we could look at the history of those files
     // to get more names.
@@ -302,7 +306,7 @@ async function getOwnerOrgs(
   github: Object
 ): Promise<Array<string>> {
   return new Promise(function(resolve, reject) {
-    github.orgs.getFromUser({ user: owner }, function(err, result) {
+    github.orgs.getForUser({ user: owner }, function(err, result) {
       if (err) {
         reject(err);
       } else {
@@ -311,6 +315,37 @@ async function getOwnerOrgs(
             return obj.login;
           })
         );
+      }
+    });
+  });
+}
+
+async function getMembersOfOrg(
+  org: string,
+  github: Object,
+  page: number
+): Promise<Array<string>> {
+  const perPage = 100;
+  return new Promise(function(resolve, reject) {
+    github.orgs.getMembers({
+      org: org,
+      page: page,
+      per_page: perPage
+    }, function(err, members) {
+      if (err) {
+        reject(err);
+      } else {
+        var logins = members.map(function (obj){
+          return obj.login;
+        })
+        if(logins.length === perPage) {
+          getMembersOfOrg(org, github, ++page).then(function(results) {
+            resolve(logins.concat(results));
+          })
+          .catch(reject);
+        } else {
+          resolve(logins);
+        }
       }
     });
   });
@@ -330,6 +365,28 @@ async function filterRequiredOrgs(
     // user passes if he is in any of the required organizations
     return config.requiredOrgs.some(function(reqOrg) {
       return userOrgs[index].indexOf(reqOrg) >= 0;
+    });
+  });
+}
+
+/**
+ * If the repo is private than we should only mention users that are still part
+ * of that org.
+ * Otherwise we could end up with a situation where all the people mentioned have
+ * left the org and none of the current staff get notified
+**/
+
+async function filterPrivateRepo(
+  owners: Array<string>,
+  org: string,
+  github: Object
+): Promise<Array<string>> {
+  var currentMembers = await getMembersOfOrg(org, github, 0);
+
+  return owners.filter(function(owner, index) {
+    // user passes if they are still in the org
+    return currentMembers.some(function(member) {
+      return member === owner;
     });
   });
 }
@@ -366,6 +423,8 @@ async function guessOwners(
   creator: string,
   defaultOwners: Array<string>,
   fallbackOwners: Array<string>,
+  privateRepo: boolean,
+  org: ?string,
   config: Object,
   github: Object
 ): Promise<Array<string>> {
@@ -398,6 +457,10 @@ async function guessOwners(
     owners = await filterRequiredOrgs(owners, config, github);
   }
 
+  if (privateRepo && org != null) {
+    owners = await filterPrivateRepo(owners, org, github);
+  }
+
   if (owners.length === 0) {
     defaultOwners = defaultOwners.concat(fallbackOwners);
   }
@@ -415,6 +478,8 @@ async function guessOwnersForPullRequest(
   id: number,
   creator: string,
   targetBranch: string,
+  privateRepo: boolean,
+  org: ?string,
   config: Object,
   github: Object
 ): Promise<Array<string>> {
@@ -458,7 +523,7 @@ async function guessOwnersForPullRequest(
 
   // This is the line that implements the actual algorithm, all the lines
   // before are there to fetch and extract the data needed.
-  return guessOwners(files, blames, creator, defaultOwners, fallbackOwners, config, github);
+  return guessOwners(files, blames, creator, defaultOwners, fallbackOwners, privateRepo, org, config, github);
 }
 
 module.exports = {
